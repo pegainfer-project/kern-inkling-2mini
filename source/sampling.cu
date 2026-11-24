@@ -471,8 +471,8 @@ extern "C" __global__ FLASHINFER_SAMPLING_LAUNCH_BOUNDS(BLOCK) void kern_verify_
       probs_vec.cast_load(probs + row_idx * d + (i * BLOCK + tx) * VEC);
     }
     fs::DeviceSamplingFromProb<VEC, BLOCK, fs::SCAN_ALGO, fs::REDUCE_ALGO, true>(
-        i, d, [&](float x) { return x >= pivot; }, u, probs_vec, aggregate, last_valid_index,
-        &temp_storage);
+        i, d, [&](float x) { return x > 0.0f && x >= pivot; }, u, probs_vec, aggregate,
+        last_valid_index, &temp_storage);
     if (aggregate > u) break;
   }
   sampled_id = temp_storage.sampled_id;
