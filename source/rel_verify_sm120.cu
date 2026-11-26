@@ -35,6 +35,9 @@ constexpr int kRing = 1024;
 constexpr int kWindow = 1024;
 constexpr int kQlen = 8;
 constexpr int kM = kQlen * kGroup;  // 24 query rows per (seq, kv_head)
+// dyn split tables: seqs > 8 overran sh_sp[8]/sh_np[8]; seqs must also stay <= total_splits (40)
+constexpr int kMaxDynSeqs = 64;
+static_assert(4 * kM >= kMaxDynSeqs, "split table must fit smem.m / smem.l");
 constexpr int kBN = 64;             // keys per tile
 constexpr int kThreads = 128;       // 4 warps
 constexpr int kPRow = 72;           // 72 bf16 = 144 B = 36 banks (0 bank conflicts)
@@ -354,7 +357,7 @@ __device__ __forceinline__ float col_reduce_sum8(float v) {
   return v;
 }
 
-// Deterministic exact-integer proportional split allocation across seqs (1..8) into SMEM sh_sp[8], sh_np[8].
+// Deterministic exact-integer proportional split allocation across seqs (1..kMaxDynSeqs) into SMEM sh_sp, sh_np.
 // Guarantees: sum(sh_sp) == total_splits (when any seq active), uniform seqs get exact floor/ceil equal splits,
 // skewed seqs get splits strictly proportional to page counts (fixing uneven-KV SOL collapse!).
 __device__ __forceinline__ void compute_dyn_splits_smem(
@@ -861,7 +864,7 @@ extern "C" __global__ void __launch_bounds__(kThreads, 3) kern_attn_full_verify_
     n_pages = (sl > 0) ? ((sl + kPage - 1) >> 6) : 0;
   } else {
     int* sh_sp = reinterpret_cast<int*>(&smem.m[0][0]);
-    int* sh_np = reinterpret_cast<int*>(&smem.m[0][8]);
+    int* sh_np = reinterpret_cast<int*>(&smem.l[0][0]);  // m and l each hold 4*kM = 96 ints
     if (tid == 0) {
       compute_dyn_splits_smem(SeqLens, seqs, total_splits, sh_sp, sh_np);
     }
@@ -1310,8 +1313,8 @@ extern "C" __global__ void __launch_bounds__(32) kern_attn_verify_combine_dyn(
   const int lane = threadIdx.x;
   const int d4 = lane << 2;
 
-  __shared__ int sh_sp[8];
-  __shared__ int sh_np[8];
+  __shared__ int sh_sp[kMaxDynSeqs];
+  __shared__ int sh_np[kMaxDynSeqs];
 
   const int seqs = num_tokens >> 3;
   const int req = static_cast<int>(row >> 3);
